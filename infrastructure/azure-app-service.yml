@@ -1,0 +1,78 @@
+parameters:
+  - name: environmentName
+    type: string
+    default: 'dev'
+  - name: location
+    type: string
+    default: 'eastus'
+  - name: appServicePlanSku
+    type: string
+    default: 'B1'
+
+variables:
+  resourceGroupName: 'weather-app-$(parameters.environmentName)-rg'
+  appServicePlanName: 'weather-app-$(parameters.environmentName)-plan'
+  backendAppName: 'weather-app-$(parameters.environmentName)-api'
+  frontendAppName: 'weather-app-$(parameters.environmentName)-web'
+
+resources:
+  - name: resourceGroup
+    type: Microsoft.Resources/resourceGroups
+    properties:
+      name: $(resourceGroupName)
+      location: $(parameters.location)
+
+  - name: appServicePlan
+    type: Microsoft.Web/serverfarms
+    dependsOn:
+      - resourceGroup
+    properties:
+      name: $(appServicePlanName)
+      location: $(parameters.location)
+      resourceGroup: $(resourceGroupName)
+      sku:
+        name: $(parameters.appServicePlanSku)
+      kind: 'linux'
+      reserved: true
+
+  - name: backendAppService
+    type: Microsoft.Web/sites
+    dependsOn:
+      - appServicePlan
+    properties:
+      name: $(backendAppName)
+      location: $(parameters.location)
+      resourceGroup: $(resourceGroupName)
+      serverFarmId: $(appServicePlanName)
+      siteConfig:
+        linuxFxVersion: 'DOTNETCORE|6.0'
+        appSettings:
+          - name: 'ASPNETCORE_ENVIRONMENT'
+            value: 'Production'
+          - name: 'WEBSITE_RUN_FROM_PACKAGE'
+            value: '1'
+
+  - name: frontendAppService
+    type: Microsoft.Web/sites
+    dependsOn:
+      - appServicePlan
+    properties:
+      name: $(frontendAppName)
+      location: $(parameters.location)
+      resourceGroup: $(resourceGroupName)
+      serverFarmId: $(appServicePlanName)
+      siteConfig:
+        linuxFxVersion: 'NODE|16-lts'
+        appSettings:
+          - name: 'SCM_DO_BUILD_DURING_DEPLOYMENT'
+            value: 'true'
+          - name: 'WEBSITE_RUN_FROM_PACKAGE'
+            value: '1'
+          - name: 'API_URL'
+            value: 'https://$(backendAppName).azurewebsites.net'
+
+outputs:
+  - name: backendUrl
+    value: 'https://$(backendAppName).azurewebsites.net'
+  - name: frontendUrl
+    value: 'https://$(frontendAppName).azurewebsites.net'

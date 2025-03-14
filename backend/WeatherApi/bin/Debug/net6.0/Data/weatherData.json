@@ -1,0 +1,58 @@
+[
+  {
+    "date": "2025-03-15T00:00:00",
+    "temperatureC": 22,
+    "summary": "Mild",
+    "humidity": 65,
+    "windDirection": "SW",
+    "windSpeed": 12.5
+  },
+  {
+    "date": "2025-03-16T00:00:00",
+    "temperatureC": 18,
+    "summary": "Cool",
+    "humidity": 70,
+    "windDirection": "W",
+    "windSpeed": 8.2
+  },
+  {
+    "date": "2025-03-17T00:00:00",
+    "temperatureC": 25,
+    "summary": "Warm",
+    "humidity": 55,
+    "windDirection": "S",
+    "windSpeed": 6.8
+  },
+  {
+    "date": "2025-03-18T00:00:00",
+    "temperatureC": 15,
+    "summary": "Chilly",
+    "humidity": 75,
+    "windDirection": "NE",
+    "windSpeed": 15.3
+  },
+  {
+    "date": "2025-03-19T00:00:00",
+    "temperatureC": 28,
+    "summary": "Hot",
+    "humidity": 45,
+    "windDirection": "SE",
+    "windSpeed": 9.7
+  },
+  {
+    "date": "2025-03-20T00:00:00",
+    "temperatureC": 12,
+    "summary": "Bracing",
+    "humidity": 80,
+    "windDirection": "N",
+    "windSpeed": 18.4
+  },
+  {
+    "date": "2025-03-21T00:00:00",
+    "temperatureC": 30,
+    "summary": "Sweltering",
+    "humidity": 40,
+    "windDirection": "S",
+    "windSpeed": 5.2
+  }
+]

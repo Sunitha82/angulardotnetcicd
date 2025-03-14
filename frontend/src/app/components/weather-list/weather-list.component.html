@@ -1,0 +1,53 @@
+<div class="weather-container">
+  <div *ngIf="loading" class="text-center my-5">
+    <p>Loading weather forecasts...</p>
+  </div>
+  
+  <div *ngIf="error" class="alert alert-danger my-3">
+    <p>Error loading weather forecasts. Please try again later.</p>
+    <button class="btn btn-primary" (click)="getWeatherForecasts()">Retry</button>
+  </div>
+  
+  <div *ngIf="!loading && !error && forecasts.length === 0" class="alert alert-info my-3">
+    <p>No weather forecasts available.</p>
+  </div>
+  
+  <div *ngIf="!loading && !error && forecasts.length > 0" class="row">
+    <div *ngFor="let forecast of forecasts" class="col-md-6 col-lg-4 mb-4">
+      <div class="card h-100">
+        <div class="card-header">
+          <h5 class="mb-0">{{ formatDate(forecast.date) }}</h5>
+        </div>
+        <div class="card-body">
+          <div class="temperature-container mb-3">
+            <div class="row">
+              <div class="col-6 text-center">
+                <h2 class="mb-0">{{ forecast.temperatureC }}°C</h2>
+                <small>Celsius</small>
+              </div>
+              <div class="col-6 text-center">
+                <h2 class="mb-0">{{ forecast.temperatureF }}°F</h2>
+                <small>Fahrenheit</small>
+              </div>
+            </div>
+          </div>
+          
+          <div class="summary-container mb-3">
+            <h4 class="text-center">{{ forecast.summary }}</h4>
+          </div>
+          
+          <div class="details-container">
+            <div class="row">
+              <div class="col-6">
+                <p><strong>Humidity:</strong> {{ forecast.humidity }}%</p>
+              </div>
+              <div class="col-6">
+                <p><strong>Wind:</strong> {{ forecast.windDirection }} {{ forecast.windSpeed }} mph</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

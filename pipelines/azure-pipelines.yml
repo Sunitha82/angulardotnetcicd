@@ -1,0 +1,131 @@
+trigger:
+  - main
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  dotnetSdkVersion: '6.0.x'
+  nodeVersion: '16.x'
+  backendProjectPath: 'backend/WeatherApi'
+  frontendProjectPath: 'frontend'
+  buildConfiguration: 'Release'
+  webAppName: 'weather-app-$(Build.BuildId)'
+
+stages:
+  - stage: Build
+    displayName: 'Build Stage'
+    jobs:
+      - job: BuildBackend
+        displayName: 'Build .NET Backend'
+        steps:
+          - task: UseDotNet@2
+            displayName: 'Install .NET SDK'
+            inputs:
+              packageType: 'sdk'
+              version: '$(dotnetSdkVersion)'
+              installationPath: $(Agent.ToolsDirectory)/dotnet
+
+          - task: DotNetCoreCLI@2
+            displayName: 'Restore NuGet packages'
+            inputs:
+              command: 'restore'
+              projects: '$(backendProjectPath)/*.csproj'
+
+          - task: DotNetCoreCLI@2
+            displayName: 'Build .NET project'
+            inputs:
+              command: 'build'
+              projects: '$(backendProjectPath)/*.csproj'
+              arguments: '--configuration $(buildConfiguration)'
+
+          - task: DotNetCoreCLI@2
+            displayName: 'Publish .NET project'
+            inputs:
+              command: 'publish'
+              publishWebProjects: false
+              projects: '$(backendProjectPath)/*.csproj'
+              arguments: '--configuration $(buildConfiguration) --output $(Build.ArtifactStagingDirectory)/backend'
+              zipAfterPublish: true
+
+          - task: PublishBuildArtifacts@1
+            displayName: 'Publish backend artifacts'
+            inputs:
+              pathToPublish: '$(Build.ArtifactStagingDirectory)/backend'
+              artifactName: 'backend'
+
+      - job: BuildFrontend
+        displayName: 'Build Angular Frontend'
+        steps:
+          - task: NodeTool@0
+            displayName: 'Install Node.js'
+            inputs:
+              versionSpec: '$(nodeVersion)'
+
+          - script: |
+              cd $(frontendProjectPath)
+              npm install
+            displayName: 'Install npm dependencies'
+
+          - script: |
+              cd $(frontendProjectPath)
+              npm run build
+            displayName: 'Build Angular app'
+
+          - task: CopyFiles@2
+            displayName: 'Copy frontend files to artifact staging directory'
+            inputs:
+              sourceFolder: '$(frontendProjectPath)/dist/weather-app'
+              contents: '**/*'
+              targetFolder: '$(Build.ArtifactStagingDirectory)/frontend'
+
+          - task: PublishBuildArtifacts@1
+            displayName: 'Publish frontend artifacts'
+            inputs:
+              pathToPublish: '$(Build.ArtifactStagingDirectory)/frontend'
+              artifactName: 'frontend'
+
+  - stage: Deploy
+    displayName: 'Deploy Stage'
+    dependsOn: Build
+    jobs:
+      - job: DeployToAzure
+        displayName: 'Deploy to Azure App Service'
+        steps:
+          - task: DownloadBuildArtifacts@0
+            displayName: 'Download backend artifacts'
+            inputs:
+              buildType: 'current'
+              downloadType: 'single'
+              artifactName: 'backend'
+              downloadPath: '$(System.ArtifactsDirectory)'
+
+          - task: DownloadBuildArtifacts@0
+            displayName: 'Download frontend artifacts'
+            inputs:
+              buildType: 'current'
+              downloadType: 'single'
+              artifactName: 'frontend'
+              downloadPath: '$(System.ArtifactsDirectory)'
+
+          - task: AzureRmWebAppDeployment@4
+            displayName: 'Deploy backend to Azure App Service'
+            inputs:
+              ConnectionType: 'AzureRM'
+              azureSubscription: 'Azure Subscription'
+              appType: 'webApp'
+              WebAppName: '$(webAppName)-api'
+              packageForLinux: '$(System.ArtifactsDirectory)/backend/*.zip'
+              enableCustomDeployment: true
+              DeploymentType: 'zipDeploy'
+
+          - task: AzureRmWebAppDeployment@4
+            displayName: 'Deploy frontend to Azure App Service'
+            inputs:
+              ConnectionType: 'AzureRM'
+              azureSubscription: 'Azure Subscription'
+              appType: 'webApp'
+              WebAppName: '$(webAppName)-web'
+              packageForLinux: '$(System.ArtifactsDirectory)/frontend'
+              enableCustomDeployment: true
+              DeploymentType: 'zipDeploy'

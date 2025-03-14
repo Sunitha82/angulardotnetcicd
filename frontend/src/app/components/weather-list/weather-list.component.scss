@@ -1,0 +1,39 @@
+.weather-container {
+  padding: 20px 0;
+}
+
+.card {
+  transition: transform 0.3s;
+  
+  &:hover {
+    transform: translateY(-5px);
+  }
+}
+
+.card-header {
+  background-color: #f8f9fa;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.125);
+}
+
+.temperature-container {
+  border-bottom: 1px solid #eee;
+  padding-bottom: 15px;
+}
+
+.summary-container {
+  padding: 15px 0;
+  border-bottom: 1px solid #eee;
+  
+  h4 {
+    margin: 0;
+    font-weight: 500;
+  }
+}
+
+.details-container {
+  padding-top: 15px;
+  
+  p {
+    margin-bottom: 5px;
+  }
+}
