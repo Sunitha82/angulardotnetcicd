@@ -23,7 +23,7 @@ parameters:
   - name: location
     displayName: 'Azure Region'
     type: string
-    default: 'eastus'
+    default: 'eastus2'
     values:
       - eastus
       - westus
@@ -43,85 +43,139 @@ parameters:
       - P1V2
 
 variables:
-  - name: infraTemplateFile
-    value: 'infrastructure/azure-app-service.yml'
-  - name: deploymentName
-    value: 'weather-app-infra-${{ parameters.environmentName }}-$(Build.BuildId)'
+  - name: resourceGroupName
+    value: 'weather-app-${{ parameters.environmentName }}-rg'
+  - name: appServicePlanName
+    value: 'weather-app-${{ parameters.environmentName }}-plan'
+  - name: backendAppName
+    value: 'weather-app-${{ parameters.environmentName }}-api'
+  - name: frontendAppName
+    value: 'weather-app-${{ parameters.environmentName }}-web'
 
 stages:
-  - stage: Validate
-    displayName: 'Validate Infrastructure Template'
+  - stage: Provision
+    displayName: 'Provision Azure Resources'
     jobs:
-      - job: ValidateTemplate
-        displayName: 'Validate ARM Template'
+      - job: CreateResourceGroup
+        displayName: 'Create Resource Group'
         steps:
           - task: AzureCLI@2
-            displayName: 'Validate Azure Infrastructure Template'
+            displayName: 'Create Resource Group'
             inputs:
               azureSubscription: 'Azure Subscription'
               scriptType: 'bash'
               scriptLocation: 'inlineScript'
               inlineScript: |
-                echo "Validating infrastructure template..."
-                az deployment sub validate \
-                  --location ${{ parameters.location }} \
-                  --template-file $(infraTemplateFile) \
-                  --parameters environmentName=${{ parameters.environmentName }} \
-                  location=${{ parameters.location }} \
-                  appServicePlanSku=${{ parameters.appServicePlanSku }}
+                echo "Checking if resource group exists: $(resourceGroupName)"
                 
-                if [ $? -eq 0 ]; then
-                  echo "Template validation successful!"
+                # Check if resource group exists
+                if az group exists --name $(resourceGroupName) --query exists -o tsv | grep -q "true"; then
+                  echo "Resource group $(resourceGroupName) already exists. Skipping creation."
                 else
-                  echo "Template validation failed!"
-                  exit 1
+                  echo "Creating resource group: $(resourceGroupName)"
+                  az group create --name $(resourceGroupName) --location ${{ parameters.location }}
+                  echo "Resource group $(resourceGroupName) created successfully."
                 fi
 
-  - stage: Deploy
-    displayName: 'Deploy Infrastructure'
-    dependsOn: Validate
-    jobs:
-      - deployment: DeployInfrastructure
-        displayName: 'Deploy Azure Resources'
-        environment: ${{ parameters.environmentName }}
-        strategy:
-          runOnce:
-            deploy:
-              steps:
-                - checkout: self
+      - job: CreateAppServicePlan
+        displayName: 'Create App Service Plan'
+        dependsOn: CreateResourceGroup
+        steps:
+          - task: AzureCLI@2
+            displayName: 'Create App Service Plan'
+            inputs:
+              azureSubscription: 'Azure Subscription'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                echo "Checking if App Service Plan exists: $(appServicePlanName)"
                 
-                - task: AzureCLI@2
-                  displayName: 'Deploy Azure Infrastructure'
-                  inputs:
-                    azureSubscription: 'Azure Subscription'
-                    scriptType: 'bash'
-                    scriptLocation: 'inlineScript'
-                    inlineScript: |
-                      echo "Deploying infrastructure to ${{ parameters.environmentName }} environment..."
-                      
-                      # Deploy the infrastructure template
-                      az deployment sub create \
-                        --name $(deploymentName) \
-                        --location ${{ parameters.location }} \
-                        --template-file $(infraTemplateFile) \
-                        --parameters environmentName=${{ parameters.environmentName }} \
-                        location=${{ parameters.location }} \
-                        appServicePlanSku=${{ parameters.appServicePlanSku }}
-                      
-                      # Get the deployment outputs
-                      BACKEND_URL=$(az deployment sub show --name $(deploymentName) --query properties.outputs.backendUrl.value -o tsv)
-                      FRONTEND_URL=$(az deployment sub show --name $(deploymentName) --query properties.outputs.frontendUrl.value -o tsv)
-                      
-                      echo "Backend URL: $BACKEND_URL"
-                      echo "Frontend URL: $FRONTEND_URL"
-                      
-                      # Store the URLs as pipeline variables for potential use in subsequent tasks
-                      echo "##vso[task.setvariable variable=backendUrl;isOutput=true]$BACKEND_URL"
-                      echo "##vso[task.setvariable variable=frontendUrl;isOutput=true]$FRONTEND_URL"
+                # Check if App Service Plan exists
+                if az appservice plan show --name $(appServicePlanName) --resource-group $(resourceGroupName) --query name -o tsv 2>/dev/null; then
+                  echo "App Service Plan $(appServicePlanName) already exists. Skipping creation."
+                else
+                  echo "Creating App Service Plan: $(appServicePlanName)"
+                  az appservice plan create \
+                    --name $(appServicePlanName) \
+                    --resource-group $(resourceGroupName) \
+                    --location ${{ parameters.location }} \
+                    --sku ${{ parameters.appServicePlanSku }} \
+                    --is-linux
+                  echo "App Service Plan $(appServicePlanName) created successfully."
+                fi
+
+      - job: CreateWebApps
+        displayName: 'Create Web Apps'
+        dependsOn: CreateAppServicePlan
+        steps:
+          - task: AzureCLI@2
+            displayName: 'Create Backend Web App'
+            inputs:
+              azureSubscription: 'Azure Subscription'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                echo "Checking if Backend Web App exists: $(backendAppName)"
+                
+                # Check if Backend Web App exists
+                if az webapp show --name $(backendAppName) --resource-group $(resourceGroupName) --query name -o tsv 2>/dev/null; then
+                  echo "Backend Web App $(backendAppName) already exists. Skipping creation."
+                else
+                  echo "Creating Backend Web App: $(backendAppName)"
+                  az webapp create \
+                    --name $(backendAppName) \
+                    --resource-group $(resourceGroupName) \
+                    --plan $(appServicePlanName) \
+                    --runtime "DOTNETCORE|6.0"
+                  echo "Backend Web App $(backendAppName) created successfully."
+                fi
+                
+                echo "Configuring app settings for Backend Web App"
+                # Configure app settings (always update settings to ensure they're correct)
+                az webapp config appsettings set \
+                  --name $(backendAppName) \
+                  --resource-group $(resourceGroupName) \
+                  --settings \
+                    ASPNETCORE_ENVIRONMENT=Production \
+                    WEBSITE_RUN_FROM_PACKAGE=1
+                echo "App settings for Backend Web App configured successfully."
+
+          - task: AzureCLI@2
+            displayName: 'Create Frontend Web App'
+            inputs:
+              azureSubscription: 'Azure Subscription'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                echo "Checking if Frontend Web App exists: $(frontendAppName)"
+                
+                # Check if Frontend Web App exists
+                if az webapp show --name $(frontendAppName) --resource-group $(resourceGroupName) --query name -o tsv 2>/dev/null; then
+                  echo "Frontend Web App $(frontendAppName) already exists. Skipping creation."
+                else
+                  echo "Creating Frontend Web App: $(frontendAppName)"
+                  az webapp create \
+                    --name $(frontendAppName) \
+                    --resource-group $(resourceGroupName) \
+                    --plan $(appServicePlanName) \
+                    --runtime "NODE|16-lts"
+                  echo "Frontend Web App $(frontendAppName) created successfully."
+                fi
+                
+                echo "Configuring app settings for Frontend Web App"
+                # Configure app settings (always update settings to ensure they're correct)
+                az webapp config appsettings set \
+                  --name $(frontendAppName) \
+                  --resource-group $(resourceGroupName) \
+                  --settings \
+                    SCM_DO_BUILD_DURING_DEPLOYMENT=true \
+                    WEBSITE_RUN_FROM_PACKAGE=1 \
+                    API_URL=https://$(backendAppName).azurewebsites.net
+                echo "App settings for Frontend Web App configured successfully."
 
   - stage: Verify
     displayName: 'Verify Deployment'
-    dependsOn: Deploy
+    dependsOn: Provision
     jobs:
       - job: VerifyResources
         displayName: 'Verify Azure Resources'
@@ -133,16 +187,19 @@ stages:
               scriptType: 'bash'
               scriptLocation: 'inlineScript'
               inlineScript: |
-                # Define resource names based on parameters
-                RESOURCE_GROUP="weather-app-${{ parameters.environmentName }}-rg"
-                BACKEND_APP="weather-app-${{ parameters.environmentName }}-api"
-                FRONTEND_APP="weather-app-${{ parameters.environmentName }}-web"
+                echo "Verifying resource group: $(resourceGroupName)"
+                az group show --name $(resourceGroupName)
                 
-                echo "Verifying resource group: $RESOURCE_GROUP"
-                az group show --name $RESOURCE_GROUP
+                echo "Verifying backend app service: $(backendAppName)"
+                az webapp show --resource-group $(resourceGroupName) --name $(backendAppName) --query "{name:name,state:state,hostNames:hostNames}" -o table
                 
-                echo "Verifying backend app service: $BACKEND_APP"
-                az webapp show --resource-group $RESOURCE_GROUP --name $BACKEND_APP --query "{name:name,state:state,hostNames:hostNames}" -o table
+                echo "Verifying frontend app service: $(frontendAppName)"
+                az webapp show --resource-group $(resourceGroupName) --name $(frontendAppName) --query "{name:name,state:state,hostNames:hostNames}" -o table
                 
-                echo "Verifying frontend app service: $FRONTEND_APP"
-                az webapp show --resource-group $RESOURCE_GROUP --name $FRONTEND_APP --query "{name:name,state:state,hostNames:hostNames}" -o table
+                # Output the URLs for reference
+                echo "Backend URL: https://$(backendAppName).azurewebsites.net"
+                echo "Frontend URL: https://$(frontendAppName).azurewebsites.net"
+                
+                # Store the URLs as pipeline variables
+                echo "##vso[task.setvariable variable=backendUrl;isOutput=true]https://$(backendAppName).azurewebsites.net"
+                echo "##vso[task.setvariable variable=frontendUrl;isOutput=true]https://$(frontendAppName).azurewebsites.net"
