@@ -8,7 +8,198 @@ parameters:
   - name: environmentName
     displayName: 'Environment Name'
     type: string
+    default: 'dev'trigger:
+  - main
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+parameters:
+  - name: environmentName
+    displayName: 'Environment Name'
+    type: string
     default: 'dev'
+    values:
+      - dev
+      - test
+      - prod
+
+variables:
+  dotnetSdkVersion: '6.0.x'
+  nodeVersion: '18.x'
+  backendProjectPath: 'backend/WeatherApi'
+  frontendProjectPath: 'frontend'
+  buildConfiguration: 'Release'
+  resourceGroupName: 'weather-app-${{ parameters.environmentName }}-rg'
+  backendAppName: 'weather-app-${{ parameters.environmentName }}-api'
+  frontendAppName: 'weather-app-${{ parameters.environmentName }}-web'
+
+stages:
+  - stage: Build
+    displayName: 'Build Stage'
+    jobs:
+      - job: BuildBackend
+        displayName: 'Build .NET Backend'
+        steps:
+          - task: UseDotNet@2
+            displayName: 'Install .NET SDK'
+            inputs:
+              packageType: 'sdk'
+              version: '$(dotnetSdkVersion)'
+              installationPath: $(Agent.ToolsDirectory)/dotnet
+
+          - task: DotNetCoreCLI@2
+            displayName: 'Restore NuGet packages'
+            inputs:
+              command: 'restore'
+              projects: '$(backendProjectPath)/*.csproj'
+
+          - task: DotNetCoreCLI@2
+            displayName: 'Build .NET project'
+            inputs:
+              command: 'build'
+              projects: '$(backendProjectPath)/*.csproj'
+              arguments: '--configuration $(buildConfiguration)'
+
+          - task: DotNetCoreCLI@2
+            displayName: 'Publish .NET project'
+            inputs:
+              command: 'publish'
+              publishWebProjects: false
+              projects: '$(backendProjectPath)/*.csproj'
+              arguments: '--configuration $(buildConfiguration) --output $(Build.ArtifactStagingDirectory)/backend'
+              zipAfterPublish: true
+
+          - task: PublishBuildArtifacts@1
+            displayName: 'Publish backend artifacts'
+            inputs:
+              pathToPublish: '$(Build.ArtifactStagingDirectory)/backend'
+              artifactName: 'backend'
+
+      - job: BuildFrontend
+        displayName: 'Build Angular Frontend'
+        steps:
+          - task: NodeTool@0
+            displayName: 'Install Node.js'
+            inputs:
+              versionSpec: '$(nodeVersion)'
+
+          - script: |
+              cd $(frontendProjectPath)
+              npm install
+              npm install -g @angular/cli
+            displayName: 'Install npm dependencies and Angular CLI'
+
+          - script: |
+              cd $(frontendProjectPath)
+              ng build --configuration production
+            displayName: 'Build Angular app'
+
+          - task: CopyFiles@2
+            displayName: 'Copy frontend files to artifact staging directory'
+            inputs:
+              sourceFolder: '$(frontendProjectPath)'
+              contents: |
+                dist/**/*
+                package.json
+                server.js
+                package-lock.json
+              targetFolder: '$(Build.ArtifactStagingDirectory)/frontend'
+
+          - task: Bash@3
+            displayName: 'Create web.config for Angular routing'
+            inputs:
+              targetType: 'inline'
+              script: |
+                mkdir -p $(Build.ArtifactStagingDirectory)/frontend
+                cat > $(Build.ArtifactStagingDirectory)/frontend/web.config << 'EOL'
+                <?xml version="1.0" encoding="utf-8"?>
+                <configuration>
+                  <system.webServer>
+                    <handlers>
+                      <add name="iisnode" path="server.js" verb="*" modules="iisnode" />
+                    </handlers>
+                    <rewrite>
+                      <rules>
+                        <rule name="NodeInspector" patternSyntax="ECMAScript" stopProcessing="true">
+                          <match url="^server.js\/debug[\/]?" />
+                        </rule>
+                        <rule name="StaticContent">
+                          <action type="Rewrite" url="dist/weather-app{REQUEST_URI}" />
+                        </rule>
+                        <rule name="DynamicContent">
+                          <conditions>
+                            <add input="{REQUEST_FILENAME}" matchType="IsFile" negate="True" />
+                          </conditions>
+                          <action type="Rewrite" url="server.js" />
+                        </rule>
+                      </rules>
+                    </rewrite>
+                    <staticContent>
+                      <mimeMap fileExtension=".json" mimeType="application/json" />
+                    </staticContent>
+                    <security>
+                      <requestFiltering>
+                        <hiddenSegments>
+                          <remove segment="bin" />
+                        </hiddenSegments>
+                      </requestFiltering>
+                    </security>
+                  </system.webServer>
+                </configuration>
+                EOL
+
+          - task: PublishBuildArtifacts@1
+            displayName: 'Publish frontend artifacts'
+            inputs:
+              pathToPublish: '$(Build.ArtifactStagingDirectory)/frontend'
+              artifactName: 'frontend'
+
+  - stage: Deploy
+    displayName: 'Deploy Stage'
+    dependsOn: Build
+    jobs:
+      - job: DeployToAzure
+        displayName: 'Deploy to Azure App Service'
+        steps:
+          - task: DownloadBuildArtifacts@0
+            displayName: 'Download backend artifacts'
+            inputs:
+              buildType: 'current'
+              downloadType: 'single'
+              artifactName: 'backend'
+              downloadPath: '$(System.ArtifactsDirectory)'
+
+          - task: DownloadBuildArtifacts@0
+            displayName: 'Download frontend artifacts'
+            inputs:
+              buildType: 'current'
+              downloadType: 'single'
+              artifactName: 'frontend'
+              downloadPath: '$(System.ArtifactsDirectory)'
+
+          - task: AzureRmWebAppDeployment@4
+            displayName: 'Deploy backend to Azure App Service'
+            inputs:
+              ConnectionType: 'AzureRM'
+              azureSubscription: 'Azure Subscription'
+              appType: 'webApp'
+              WebAppName: '$(backendAppName)'
+              ResourceGroupName: '$(resourceGroupName)'
+              packageForLinux: '$(System.ArtifactsDirectory)/backend/*.zip'
+              enableCustomDeployment: true
+              DeploymentType: 'zipDeploy'
+
+          - task: AzureWebApp@1
+            displayName: 'Deploy frontend to Azure App Service'
+            inputs:
+              azureSubscription: 'Azure Subscription'
+              appType: 'webAppLinux'
+              appName: '$(frontendAppName)'
+              resourceGroupName: '$(resourceGroupName)'
+              package: '$(System.ArtifactsDirectory)/frontend'
+              runtimeStack: 'NODE|18-lts'
+              startUpCommand: 'node server.js'
     values:
       - dev
       - test
