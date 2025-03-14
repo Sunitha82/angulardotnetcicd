@@ -4,13 +4,25 @@ trigger:
 pool:
   vmImage: 'ubuntu-latest'
 
+parameters:
+  - name: environmentName
+    displayName: 'Environment Name'
+    type: string
+    default: 'dev'
+    values:
+      - dev
+      - test
+      - prod
+
 variables:
   dotnetSdkVersion: '6.0.x'
-  nodeVersion: '16.x'
+  nodeVersion: '18.x'
   backendProjectPath: 'backend/WeatherApi'
   frontendProjectPath: 'frontend'
   buildConfiguration: 'Release'
-  webAppName: 'weather-app-$(Build.BuildId)'
+  resourceGroupName: 'weather-app-${{ parameters.environmentName }}-rg'
+  backendAppName: 'weather-app-${{ parameters.environmentName }}-api'
+  frontendAppName: 'weather-app-${{ parameters.environmentName }}-web'
 
 stages:
   - stage: Build
@@ -65,6 +77,7 @@ stages:
           - script: |
               cd $(frontendProjectPath)
               npm install
+              npm install -g @angular/cli
             displayName: 'Install npm dependencies'
 
           - script: |
@@ -73,12 +86,45 @@ stages:
             displayName: 'Build Angular app'
 
           - task: CopyFiles@2
-            displayName: 'Copy frontend files to artifact staging directory'
+            displayName: 'Copy frontend build files to artifact staging directory'
             inputs:
               sourceFolder: '$(frontendProjectPath)/dist/weather-app'
               contents: '**/*'
+              targetFolder: '$(Build.ArtifactStagingDirectory)/frontend/dist'
+
+          - task: CopyFiles@2
+            displayName: 'Copy package.json to artifact staging directory'
+            inputs:
+              sourceFolder: '$(frontendProjectPath)'
+              contents: 'package.json'
               targetFolder: '$(Build.ArtifactStagingDirectory)/frontend'
 
+          - task: CopyFiles@2
+            displayName: 'Create web.config for Angular routing'
+            inputs:
+              contents: |
+                <?xml version="1.0" encoding="UTF-8"?>
+                <configuration>
+                  <system.webServer>
+                    <rewrite>
+                      <rules>
+                        <rule name="Angular Routes" stopProcessing="true">
+                          <match url=".*" />
+                          <conditions logicalGrouping="MatchAll">
+                            <add input="{REQUEST_FILENAME}" matchType="IsFile" negate="true" />
+                            <add input="{REQUEST_FILENAME}" matchType="IsDirectory" negate="true" />
+                          </conditions>
+                          <action type="Rewrite" url="/" />
+                        </rule>
+                      </rules>
+                    </rewrite>
+                    <staticContent>
+                      <mimeMap fileExtension=".json" mimeType="application/json" />
+                    </staticContent>
+                  </system.webServer>
+                </configuration>
+              targetFolder: '$(Build.ArtifactStagingDirectory)/frontend/dist'
+              flattenFolders: true
           - task: PublishBuildArtifacts@1
             displayName: 'Publish frontend artifacts'
             inputs:
@@ -114,7 +160,8 @@ stages:
               ConnectionType: 'AzureRM'
               azureSubscription: 'Azure Subscription'
               appType: 'webApp'
-              WebAppName: '$(webAppName)-api'
+              WebAppName: '$(backendAppName)'
+              ResourceGroupName: '$(resourceGroupName)'
               packageForLinux: '$(System.ArtifactsDirectory)/backend/*.zip'
               enableCustomDeployment: true
               DeploymentType: 'zipDeploy'
@@ -125,7 +172,8 @@ stages:
               ConnectionType: 'AzureRM'
               azureSubscription: 'Azure Subscription'
               appType: 'webApp'
-              WebAppName: '$(webAppName)-web'
+              WebAppName: '$(frontendAppName)'
+              ResourceGroupName: '$(resourceGroupName)'
               packageForLinux: '$(System.ArtifactsDirectory)/frontend'
               enableCustomDeployment: true
               DeploymentType: 'zipDeploy'
