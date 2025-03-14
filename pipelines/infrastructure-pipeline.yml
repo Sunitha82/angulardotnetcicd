@@ -1,0 +1,148 @@
+trigger:
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - infrastructure/*
+      - pipelines/infrastructure-pipeline.yml
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+parameters:
+  - name: environmentName
+    displayName: 'Environment Name'
+    type: string
+    default: 'dev'
+    values:
+      - dev
+      - test
+      - prod
+  
+  - name: location
+    displayName: 'Azure Region'
+    type: string
+    default: 'eastus'
+    values:
+      - eastus
+      - westus
+      - centralus
+      - eastus2
+      - westeurope
+      - northeurope
+
+  - name: appServicePlanSku
+    displayName: 'App Service Plan SKU'
+    type: string
+    default: 'B1'
+    values:
+      - B1
+      - B2
+      - S1
+      - P1V2
+
+variables:
+  - name: infraTemplateFile
+    value: 'infrastructure/azure-app-service.yml'
+  - name: deploymentName
+    value: 'weather-app-infra-${{ parameters.environmentName }}-$(Build.BuildId)'
+
+stages:
+  - stage: Validate
+    displayName: 'Validate Infrastructure Template'
+    jobs:
+      - job: ValidateTemplate
+        displayName: 'Validate ARM Template'
+        steps:
+          - task: AzureCLI@2
+            displayName: 'Validate Azure Infrastructure Template'
+            inputs:
+              azureSubscription: 'Azure Subscription'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                echo "Validating infrastructure template..."
+                az deployment sub validate \
+                  --location ${{ parameters.location }} \
+                  --template-file $(infraTemplateFile) \
+                  --parameters environmentName=${{ parameters.environmentName }} \
+                  location=${{ parameters.location }} \
+                  appServicePlanSku=${{ parameters.appServicePlanSku }}
+                
+                if [ $? -eq 0 ]; then
+                  echo "Template validation successful!"
+                else
+                  echo "Template validation failed!"
+                  exit 1
+                fi
+
+  - stage: Deploy
+    displayName: 'Deploy Infrastructure'
+    dependsOn: Validate
+    jobs:
+      - deployment: DeployInfrastructure
+        displayName: 'Deploy Azure Resources'
+        environment: ${{ parameters.environmentName }}
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+                
+                - task: AzureCLI@2
+                  displayName: 'Deploy Azure Infrastructure'
+                  inputs:
+                    azureSubscription: 'Azure Subscription'
+                    scriptType: 'bash'
+                    scriptLocation: 'inlineScript'
+                    inlineScript: |
+                      echo "Deploying infrastructure to ${{ parameters.environmentName }} environment..."
+                      
+                      # Deploy the infrastructure template
+                      az deployment sub create \
+                        --name $(deploymentName) \
+                        --location ${{ parameters.location }} \
+                        --template-file $(infraTemplateFile) \
+                        --parameters environmentName=${{ parameters.environmentName }} \
+                        location=${{ parameters.location }} \
+                        appServicePlanSku=${{ parameters.appServicePlanSku }}
+                      
+                      # Get the deployment outputs
+                      BACKEND_URL=$(az deployment sub show --name $(deploymentName) --query properties.outputs.backendUrl.value -o tsv)
+                      FRONTEND_URL=$(az deployment sub show --name $(deploymentName) --query properties.outputs.frontendUrl.value -o tsv)
+                      
+                      echo "Backend URL: $BACKEND_URL"
+                      echo "Frontend URL: $FRONTEND_URL"
+                      
+                      # Store the URLs as pipeline variables for potential use in subsequent tasks
+                      echo "##vso[task.setvariable variable=backendUrl;isOutput=true]$BACKEND_URL"
+                      echo "##vso[task.setvariable variable=frontendUrl;isOutput=true]$FRONTEND_URL"
+
+  - stage: Verify
+    displayName: 'Verify Deployment'
+    dependsOn: Deploy
+    jobs:
+      - job: VerifyResources
+        displayName: 'Verify Azure Resources'
+        steps:
+          - task: AzureCLI@2
+            displayName: 'Verify Resource Group and Services'
+            inputs:
+              azureSubscription: 'Azure Subscription'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                # Define resource names based on parameters
+                RESOURCE_GROUP="weather-app-${{ parameters.environmentName }}-rg"
+                BACKEND_APP="weather-app-${{ parameters.environmentName }}-api"
+                FRONTEND_APP="weather-app-${{ parameters.environmentName }}-web"
+                
+                echo "Verifying resource group: $RESOURCE_GROUP"
+                az group show --name $RESOURCE_GROUP
+                
+                echo "Verifying backend app service: $BACKEND_APP"
+                az webapp show --resource-group $RESOURCE_GROUP --name $BACKEND_APP --query "{name:name,state:state,hostNames:hostNames}" -o table
+                
+                echo "Verifying frontend app service: $FRONTEND_APP"
+                az webapp show --resource-group $RESOURCE_GROUP --name $FRONTEND_APP --query "{name:name,state:state,hostNames:hostNames}" -o table
